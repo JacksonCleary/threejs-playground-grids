@@ -5,11 +5,7 @@ export class RenderLoop {
     private clock = new THREE.Clock();
     private running = false;
 
-    constructor(
-        private renderer: THREE.WebGPURenderer,
-        private scene: THREE.Scene,
-        private camera: THREE.Camera,
-    ) {}
+    constructor(private renderPipeline: THREE.RenderPipeline) {}
 
     start(onTick: (deltaSeconds: number) => void): void {
         if (this.running) return;
@@ -21,7 +17,7 @@ export class RenderLoop {
             this.rafId = requestAnimationFrame(tick);
             const dt = this.clock.getDelta();
             onTick(dt);
-            this.renderer.render(this.scene, this.camera);
+            this.renderPipeline.render();
         };
 
         this.rafId = requestAnimationFrame(tick);

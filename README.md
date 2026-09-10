@@ -11,7 +11,8 @@ This repository is intentionally minimal and is designed as a foundation for new
 - Entity-based scene composition
 - Reusable EventBus and ResourceManager
 - Perspective camera controller and render loop
-- Starter scene: AmbientLight + rotating ExampleCube
+- Starter example scene: ambient light, directional light, a spinning cube, particle system, swarm of cubes, and a post-processing effect.
+- Uses a render pipeline for rendering assets and to handle TSL over GLSL with post-processing effects in a single pass.
 
 ## Quick Start
 
@@ -37,6 +38,7 @@ npm run preview
 - `src/entities/ExampleCube.ts` is a minimal example entity.
 - `src/entities/AmbientLight.ts` adds base scene lighting.
 - `src/EventBus.ts`, `src/ResourceManager.ts`, `src/RenderLoop.ts`, and `src/Camera.ts` are reusable core utilities.
+- `src/PostProcess.ts` is a placeholder for post-processing effects.
 
 ## Creating Your Own Scene
 

@@ -9,3 +9,11 @@ export interface AppContext {
     readonly events: EventBus;
     readonly resources: ResourceManager;
 }
+
+export type AppState = 'idle' | 'loading' | 'running' | 'disposed';
+
+export interface AppConfig {
+    canvas: HTMLCanvasElement;
+    postProcessing?: boolean;
+    debug?: boolean;
+}

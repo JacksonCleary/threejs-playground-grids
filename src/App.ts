@@ -1,18 +1,18 @@
 import * as THREE from 'three/webgpu';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PostProcessing } from './PostProcessing';
 import { EventBus } from './EventBus';
 import { RenderLoop } from './RenderLoop';
 import { ResourceManager } from './ResourceManager';
 import { Camera } from './Camera';
 import type { SceneEntity } from './SceneEntity';
-import type { AppContext } from './types/AppContext';
+import type { AppContext, AppConfig, AppState } from './types/AppContext';
 import Stats from 'three/addons/libs/stats.module.js';
 import { COLORS } from './constants/color';
 
-type AppState = 'idle' | 'loading' | 'running' | 'disposed';
-
 export class App implements AppContext {
     readonly renderer: THREE.WebGPURenderer;
+    readonly renderPipeline: THREE.RenderPipeline;
     readonly scene: THREE.Scene;
     readonly cameraController: Camera;
     readonly camera: THREE.PerspectiveCamera;
@@ -30,18 +30,17 @@ export class App implements AppContext {
     private stats?: Stats;
 
     private controls?: OrbitControls;
+    private postProcessing?: PostProcessing;
 
-    constructor(canvas: HTMLCanvasElement, debug: boolean) {
+    constructor({ canvas, postProcessing, debug }: AppConfig) {
         // Renderer
         this.renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
-        // Removed this.renderer.setSize(window.innerWidth, window.innerHeight);
-        // because it is handled uniformly by this.onResize() being called below.
+        this.renderPipeline = new THREE.RenderPipeline(this.renderer);
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.scene = new THREE.Scene();
-        // this.scene.background = new THREE.Color(0x87ceeb); // Sky blue
         this.scene.background = new THREE.Color(COLORS.bg);
 
         // Atmosphere
@@ -61,13 +60,19 @@ export class App implements AppContext {
         this.resources = new ResourceManager();
 
         // Engine
-        this.loop = new RenderLoop(this.renderer, this.scene, this.camera);
+        this.loop = new RenderLoop(this.renderPipeline);
+
+        // Optional Post Processing
+        if (postProcessing) {
+            this.postProcessing = new PostProcessing(this.scene, this.camera, this.renderPipeline);
+            this.postProcessing.buildOutput();
+        }
 
         window.addEventListener('resize', this.onResize);
         this.onResize();
 
-        this.debug = debug;
-        if (this.debug) {
+        if (debug) {
+            this.debug = true;
             this.stats = new Stats();
             document.body.appendChild(this.stats.dom);
         }
@@ -134,6 +139,7 @@ export class App implements AppContext {
         this.entities = [];
         this.resources.dispose();
         this.events.clear();
+        this.renderPipeline.dispose();
         this.renderer.dispose();
         window.removeEventListener('resize', this.onResize);
 

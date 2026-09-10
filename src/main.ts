@@ -5,11 +5,12 @@ import { ExampleStage } from './stages/ExampleStage';
 const canvas = document.querySelector<HTMLCanvasElement>('#canvas');
 if (!canvas) throw new Error('No #canvas element found');
 
+const postProcessing = true;
 const debug = true;
 
-const app = new App(canvas, debug);
+const app = new App({ canvas, postProcessing, debug });
 
-// 2. Load the stage
+// Load the stage
 const stage = new ExampleStage();
 stage.init(app);
 
