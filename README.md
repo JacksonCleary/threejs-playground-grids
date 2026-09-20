@@ -4,6 +4,9 @@ Clean Three.js starter powered by TypeScript and Vite.
 
 This repository is intentionally minimal and is designed as a foundation for new 3D projects. It ships with a small app framework (app lifecycle, render loop, entity pattern, resource manager, event bus, camera controller) plus a basic starter scene.
 
+Screenshot:
+![Image of Render](./screenshot.png)
+
 ## What You Get
 
 - TypeScript + Vite setup for fast iteration
