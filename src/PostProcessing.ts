@@ -22,7 +22,7 @@ export class PostProcessing {
         const regularPass = pass(this.scene, this.camera);
         // const pixelatedScene = pixelationPass(this.scene, this.camera, 3, 0.3, 0.4);
 
-        const output = afterImage(regularPass, 0.8);
+        const output = afterImage(regularPass, 0);
         // const output = afterImage(pixelatedScene, 0.8);
 
         this.renderPipeline.outputNode = output;

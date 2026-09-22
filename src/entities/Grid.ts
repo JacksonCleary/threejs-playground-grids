@@ -1,0 +1,209 @@
+import * as THREE from 'three/webgpu';
+import { SceneEntity } from '../SceneEntity';
+import type { AppContext } from '../types/AppContext';
+
+interface FlyingPlate {
+    mesh: THREE.Mesh;
+    startPosition: THREE.Vector3;
+    targetPosition: THREE.Vector3;
+    delay: number;
+    elapsed: number;
+    duration: number;
+}
+
+export class Grid extends SceneEntity {
+    declare mesh: THREE.Group;
+    alwaysUpdate = true;
+    private grid: Map<string, boolean> = new Map();
+    private readonly cellSize = 1;
+    private readonly flyInDistance = 108;
+    private readonly flyInDuration = 1;
+    private flyingPlates: FlyingPlate[] = [];
+
+    constructor(
+        private rows: number = 10,
+        private cols: number = 10,
+        private depth: number = 10,
+    ) {
+        super();
+    }
+
+    setGrid(rows: number, cols: number, depth: number): void {
+        this.rows = rows;
+        this.cols = cols;
+        this.depth = depth;
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                for (let d = 0; d < depth; d++) {
+                    this.setCell(row, col, d, false);
+                }
+            }
+        }
+    }
+
+    getRows(): number {
+        return this.rows;
+    }
+
+    getCols(): number {
+        return this.cols;
+    }
+
+    getDepth(): number {
+        return this.depth;
+    }
+
+    isCellAvailable(row: number, col: number, depth: number): boolean {
+        return this.isInBounds(row, col, depth) && !this.getCell(row, col, depth);
+    }
+
+    reserveCell(row: number, col: number, depth: number): boolean {
+        if (!this.isCellAvailable(row, col, depth)) {
+            return false;
+        }
+
+        this.setCell(row, col, depth, true);
+        return true;
+    }
+
+    freeCell(row: number, col: number, depth: number): void {
+        this.setCell(row, col, depth, false);
+    }
+
+    setCell(row: number, col: number, depth: number, value: boolean): void {
+        const key = `${row},${col},${depth}`;
+        this.grid.set(key, value);
+    }
+
+    getCell(row: number, col: number, depth: number): boolean {
+        const key = `${row},${col},${depth}`;
+        return this.grid.get(key) ?? false;
+    }
+
+    private isInBounds(row: number, col: number, depth: number): boolean {
+        return (
+            row >= 0 &&
+            row < this.rows &&
+            col >= 0 &&
+            col < this.cols &&
+            depth >= 0 &&
+            depth < this.depth
+        );
+    }
+
+    init(app: AppContext): void {
+        this.setGrid(this.rows, this.cols, this.depth);
+        this.mesh = new THREE.Group();
+        this.mesh.position.set(
+            -(this.cols * this.cellSize) / 2 + this.cellSize / 2,
+            0,
+            -(this.rows * this.cellSize) / 2 + this.cellSize / 2,
+        );
+
+        const geometry = new THREE.BoxGeometry(this.cellSize, this.cellSize, this.cellSize);
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xff0000,
+            roughness: 0.85,
+            wireframe: true,
+        });
+
+        const rowCenter = (this.rows - 1) / 2;
+        const colCenter = (this.cols - 1) / 2;
+        const depthCenter = (this.depth - 1) / 2;
+
+        for (let row = 0; row < this.rows; row++) {
+            for (let col = 0; col < this.cols; col++) {
+                for (let d = 0; d < this.depth; d++) {
+                    const plate = new THREE.Mesh(geometry, material);
+                    const targetPosition = new THREE.Vector3(
+                        col * this.cellSize,
+                        -this.cellSize / 2 - d * this.cellSize,
+                        row * this.cellSize,
+                    );
+
+                    // Grid-space outward direction: -1/0/+1 per axis depending on
+                    // whether this cell sits on the min/max boundary of that axis.
+                    const rowDir = row === 0 ? -1 : row === this.rows - 1 ? 1 : 0;
+                    const colDir = col === 0 ? -1 : col === this.cols - 1 ? 1 : 0;
+                    const depthDir = d === 0 ? -1 : d === this.depth - 1 ? 1 : 0;
+
+                    // Map grid-space direction to world-space, matching the same
+                    // axis mapping used for position above (x=col, y=-depth, z=row).
+                    const direction = new THREE.Vector3(colDir, -depthDir, rowDir);
+
+                    if (direction.lengthSq() === 0) {
+                        // Interior cube touching no face: find the single closest
+                        // boundary (row/col/depth, min or max side) and reuse that
+                        // axis's direction, same as the face cube sitting there.
+                        const candidates: Array<{ distance: number; vector: THREE.Vector3 }> = [
+                            { distance: row, vector: new THREE.Vector3(0, 0, -1) },
+                            { distance: this.rows - 1 - row, vector: new THREE.Vector3(0, 0, 1) },
+                            { distance: col, vector: new THREE.Vector3(-1, 0, 0) },
+                            { distance: this.cols - 1 - col, vector: new THREE.Vector3(1, 0, 0) },
+                            { distance: d, vector: new THREE.Vector3(0, 1, 0) },
+                            { distance: this.depth - 1 - d, vector: new THREE.Vector3(0, -1, 0) },
+                        ];
+                        const closest = candidates.reduce((a, b) =>
+                            b.distance < a.distance ? b : a,
+                        );
+                        direction.copy(closest.vector);
+                    }
+                    direction.normalize();
+
+                    const startPosition = targetPosition
+                        .clone()
+                        .addScaledVector(direction, this.flyInDistance);
+                    plate.position.copy(startPosition);
+
+                    const distanceFromCenter = new THREE.Vector3(
+                        col - colCenter,
+                        d - depthCenter,
+                        row - rowCenter,
+                    ).length();
+
+                    const max = 0.35;
+                    const min = 0.01;
+
+                    this.mesh.add(plate);
+                    this.flyingPlates.push({
+                        mesh: plate,
+                        startPosition,
+                        targetPosition,
+                        delay: distanceFromCenter * (Math.random() * (max - min) + min),
+                        elapsed: 0,
+                        duration: this.flyInDuration,
+                    });
+                }
+            }
+        }
+
+        app.scene.add(this.mesh);
+    }
+
+    update(deltaSeconds: number): void {
+        for (const plate of this.flyingPlates) {
+            if (plate.delay > 0) {
+                plate.delay -= deltaSeconds;
+                continue;
+            }
+            if (plate.elapsed >= plate.duration) {
+                continue;
+            }
+
+            plate.elapsed = Math.min(plate.elapsed + deltaSeconds, plate.duration);
+            const t = plate.elapsed / plate.duration;
+            const eased = 1 - (1 - t) * (1 - t);
+            plate.mesh.position.lerpVectors(plate.startPosition, plate.targetPosition, eased);
+        }
+    }
+
+    dispose(): void {
+        this.mesh.traverse((object) => {
+            if (object instanceof THREE.Mesh) {
+                object.geometry.dispose();
+                (object.material as THREE.Material).dispose();
+            }
+        });
+        this.mesh.removeFromParent();
+    }
+}

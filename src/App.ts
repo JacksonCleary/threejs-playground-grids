@@ -49,7 +49,7 @@ export class App implements AppContext {
         // this.scene.fog = new THREE.Fog(0x87ceeb, 50, 95);
 
         // Camera
-        this.cameraController = new Camera(0, 0, 20);
+        this.cameraController = new Camera(20, 20, 20);
         this.camera = this.cameraController.getInstance();
         this.cameraController.attachControls(this.renderer);
 
