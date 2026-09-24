@@ -17,6 +17,7 @@ export class Grid extends SceneEntity {
     private grid: Map<string, boolean> = new Map();
     private readonly cellSize = 1;
     private readonly flyInDistance = 108;
+    // private readonly flyInDuration = 1;
     private readonly flyInDuration = 1;
     private flyingPlates: FlyingPlate[] = [];
 
@@ -103,21 +104,21 @@ export class Grid extends SceneEntity {
         const geometry = new THREE.BoxGeometry(this.cellSize, this.cellSize, this.cellSize);
         const material = new THREE.MeshStandardMaterial({
             color: 0xff0000,
-            roughness: 0.85,
-            wireframe: true,
+            roughness: 0.1,
+            wireframe: false,
         });
 
         const rowCenter = (this.rows - 1) / 2;
         const colCenter = (this.cols - 1) / 2;
         const depthCenter = (this.depth - 1) / 2;
+        const maxDistanceFromCenter = new THREE.Vector3(colCenter, depthCenter, rowCenter).length();
 
         for (let row = 0; row < this.rows; row++) {
             for (let col = 0; col < this.cols; col++) {
                 for (let d = 0; d < this.depth; d++) {
-                    const plate = new THREE.Mesh(geometry, material);
                     const targetPosition = new THREE.Vector3(
                         col * this.cellSize,
-                        -this.cellSize / 2 - d * this.cellSize,
+                        d * this.cellSize,
                         row * this.cellSize,
                     );
 
@@ -129,26 +130,35 @@ export class Grid extends SceneEntity {
 
                     // Map grid-space direction to world-space, matching the same
                     // axis mapping used for position above (x=col, y=-depth, z=row).
-                    const direction = new THREE.Vector3(colDir, -depthDir, rowDir);
+                    const direction = new THREE.Vector3(colDir, depthDir, rowDir);
 
                     if (direction.lengthSq() === 0) {
                         // Interior cube touching no face: find the single closest
                         // boundary (row/col/depth, min or max side) and reuse that
                         // axis's direction, same as the face cube sitting there.
                         const candidates: Array<{ distance: number; vector: THREE.Vector3 }> = [
+                            // Distance to the nearest boundary along the row axis.
                             { distance: row, vector: new THREE.Vector3(0, 0, -1) },
+                            // Distance to the far boundary along the row axis.
                             { distance: this.rows - 1 - row, vector: new THREE.Vector3(0, 0, 1) },
+                            // Distance to the nearest boundary along the column axis.
                             { distance: col, vector: new THREE.Vector3(-1, 0, 0) },
+                            // Distance to the far boundary along the column axis.
                             { distance: this.cols - 1 - col, vector: new THREE.Vector3(1, 0, 0) },
+                            // Distance to the nearest boundary along the depth axis.
                             { distance: d, vector: new THREE.Vector3(0, 1, 0) },
+                            // Distance to the far boundary along the depth axis.
                             { distance: this.depth - 1 - d, vector: new THREE.Vector3(0, -1, 0) },
                         ];
-                        const closest = candidates.reduce((a, b) =>
-                            b.distance < a.distance ? b : a,
-                        );
-                        direction.copy(closest.vector);
+                        const minDistance = Math.min(...candidates.map((c) => c.distance));
+                        const tied = candidates.filter((c) => c.distance === minDistance);
+                        const choice = tied[Math.floor(Math.random() * tied.length)];
+                        direction.copy(choice.vector);
                     }
                     direction.normalize();
+
+                    const plateMaterial = material.clone();
+                    const plate = new THREE.Mesh(geometry, plateMaterial);
 
                     const startPosition = targetPosition
                         .clone()
@@ -164,12 +174,23 @@ export class Grid extends SceneEntity {
                     const max = 0.35;
                     const min = 0.01;
 
+                    // Non-linear (squared) redistribution: in a solid grid, the
+                    // majority of cubes sit at moderate-to-high distances from
+                    // center (only a handful of cells are actually near it), so
+                    // that's the band that needs spreading out to avoid many
+                    // cubes landing together. Squaring the normalized fraction
+                    // steepens the curve precisely in that high range while
+                    // compressing the few already-close-to-center cells further.
+                    const normalizedDistance =
+                        maxDistanceFromCenter > 0 ? distanceFromCenter / maxDistanceFromCenter : 0;
+                    const spreadDistance = normalizedDistance * normalizedDistance * maxDistanceFromCenter;
+
                     this.mesh.add(plate);
                     this.flyingPlates.push({
                         mesh: plate,
                         startPosition,
                         targetPosition,
-                        delay: distanceFromCenter * (Math.random() * (max - min) + min),
+                        delay: spreadDistance * (Math.random() * (max - min) + min),
                         elapsed: 0,
                         duration: this.flyInDuration,
                     });
@@ -182,18 +203,16 @@ export class Grid extends SceneEntity {
 
     update(deltaSeconds: number): void {
         for (const plate of this.flyingPlates) {
+            // Flight is gated behind this plate's stagger delay; the cube just
+            // sits at its start position until the delay runs out.
             if (plate.delay > 0) {
                 plate.delay -= deltaSeconds;
-                continue;
+            } else if (plate.elapsed < plate.duration) {
+                plate.elapsed = Math.min(plate.elapsed + deltaSeconds, plate.duration);
+                const t = plate.elapsed / plate.duration;
+                const eased = 1 - (1 - t) * (1 - t);
+                plate.mesh.position.lerpVectors(plate.startPosition, plate.targetPosition, eased);
             }
-            if (plate.elapsed >= plate.duration) {
-                continue;
-            }
-
-            plate.elapsed = Math.min(plate.elapsed + deltaSeconds, plate.duration);
-            const t = plate.elapsed / plate.duration;
-            const eased = 1 - (1 - t) * (1 - t);
-            plate.mesh.position.lerpVectors(plate.startPosition, plate.targetPosition, eased);
         }
     }
 

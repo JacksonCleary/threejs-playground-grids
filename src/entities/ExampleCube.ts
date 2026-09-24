@@ -15,11 +15,16 @@ export class ExampleCube extends SceneEntity {
     }
 
     init(app: AppContext): void {
-        this.mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(1, 1, 1),
-            new THREE.MeshStandardMaterial({ color: this.color }),
-        );
+        const geometry = new THREE.BoxGeometry(1, 1, 1);
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xff0000,
+            roughness: 0.85,
+            wireframe: true,
+        });
+
+        this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.copy(this.position);
+
         app.scene.add(this.mesh);
 
         // Example: react to resize events via EventBus
@@ -31,8 +36,8 @@ export class ExampleCube extends SceneEntity {
     }
 
     update(dt: number): void {
-        this.mesh.rotation.x += dt * 0.5;
-        this.mesh.rotation.y += dt * 0.8;
+        // this.mesh.rotation.x += dt * 0.5;
+        // this.mesh.rotation.y += dt * 0.8;
     }
 
     dispose(): void {
