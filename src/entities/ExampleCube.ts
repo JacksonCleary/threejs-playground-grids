@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { SceneEntity } from '../SceneEntity';
 import type { AppContext } from '../types/AppContext';
 import { COLORS } from '../constants/color';
+import { createElongateNode } from '../shaders/tsl/elongate';
 
 export class ExampleCube extends SceneEntity {
     mesh!: THREE.Mesh;
@@ -21,6 +22,10 @@ export class ExampleCube extends SceneEntity {
             roughness: 0.85,
             wireframe: true,
         });
+
+        const { positionNode, stretchNode } = createElongateNode(new THREE.Vector3(1, 0, 0));
+        stretchNode.value = 1.5;
+        material.positionNode = positionNode;
 
         this.mesh = new THREE.Mesh(geometry, material);
         this.mesh.position.copy(this.position);

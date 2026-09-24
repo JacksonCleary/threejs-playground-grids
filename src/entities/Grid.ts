@@ -9,6 +9,7 @@ interface FlyingPlate {
     delay: number;
     elapsed: number;
     duration: number;
+    stretchAxis: 'x' | 'y' | 'z';
 }
 
 export class Grid extends SceneEntity {
@@ -19,6 +20,12 @@ export class Grid extends SceneEntity {
     private readonly flyInDistance = 108;
     // private readonly flyInDuration = 1;
     private readonly flyInDuration = 1;
+    // How far a plate stretches into a rectangular cuboid along its travel axis at top speed.
+    private readonly maxStretch = 20;
+    // Independent-of-position jitter so cubes with near-identical spreadDistance
+    // (e.g. bunched near the grid center) don't land in perfect unison.
+    private readonly baseDelayJitter = 0.15;
+    private readonly durationJitter = 0.3;
     private flyingPlates: FlyingPlate[] = [];
 
     constructor(
@@ -122,43 +129,34 @@ export class Grid extends SceneEntity {
                         row * this.cellSize,
                     );
 
-                    // Grid-space outward direction: -1/0/+1 per axis depending on
-                    // whether this cell sits on the min/max boundary of that axis.
-                    const rowDir = row === 0 ? -1 : row === this.rows - 1 ? 1 : 0;
-                    const colDir = col === 0 ? -1 : col === this.cols - 1 ? 1 : 0;
-                    const depthDir = d === 0 ? -1 : d === this.depth - 1 ? 1 : 0;
-
-                    // Map grid-space direction to world-space, matching the same
-                    // axis mapping used for position above (x=col, y=-depth, z=row).
-                    const direction = new THREE.Vector3(colDir, depthDir, rowDir);
-
-                    if (direction.lengthSq() === 0) {
-                        // Interior cube touching no face: find the single closest
-                        // boundary (row/col/depth, min or max side) and reuse that
-                        // axis's direction, same as the face cube sitting there.
-                        const candidates: Array<{ distance: number; vector: THREE.Vector3 }> = [
-                            // Distance to the nearest boundary along the row axis.
-                            { distance: row, vector: new THREE.Vector3(0, 0, -1) },
-                            // Distance to the far boundary along the row axis.
-                            { distance: this.rows - 1 - row, vector: new THREE.Vector3(0, 0, 1) },
-                            // Distance to the nearest boundary along the column axis.
-                            { distance: col, vector: new THREE.Vector3(-1, 0, 0) },
-                            // Distance to the far boundary along the column axis.
-                            { distance: this.cols - 1 - col, vector: new THREE.Vector3(1, 0, 0) },
-                            // Distance to the nearest boundary along the depth axis.
-                            { distance: d, vector: new THREE.Vector3(0, 1, 0) },
-                            // Distance to the far boundary along the depth axis.
-                            { distance: this.depth - 1 - d, vector: new THREE.Vector3(0, -1, 0) },
-                        ];
-                        const minDistance = Math.min(...candidates.map((c) => c.distance));
-                        const tied = candidates.filter((c) => c.distance === minDistance);
-                        const choice = tied[Math.floor(Math.random() * tied.length)];
-                        direction.copy(choice.vector);
-                    }
-                    direction.normalize();
+                    // Every cell flies straight in from whichever of the 6 grid
+                    // faces (row/col/depth, min or max side) is nearest, instead of
+                    // diagonally through edges/corners. Ties are broken randomly.
+                    const candidates: Array<{ distance: number; vector: THREE.Vector3 }> = [
+                        // Distance to the nearest boundary along the row axis.
+                        { distance: row, vector: new THREE.Vector3(0, 0, -1) },
+                        // Distance to the far boundary along the row axis.
+                        { distance: this.rows - 1 - row, vector: new THREE.Vector3(0, 0, 1) },
+                        // Distance to the nearest boundary along the column axis.
+                        { distance: col, vector: new THREE.Vector3(-1, 0, 0) },
+                        // Distance to the far boundary along the column axis.
+                        { distance: this.cols - 1 - col, vector: new THREE.Vector3(1, 0, 0) },
+                        // Distance to the nearest boundary along the depth axis.
+                        { distance: d, vector: new THREE.Vector3(0, 1, 0) },
+                        // Distance to the far boundary along the depth axis.
+                        { distance: this.depth - 1 - d, vector: new THREE.Vector3(0, -1, 0) },
+                    ];
+                    const minDistance = Math.min(...candidates.map((c) => c.distance));
+                    const tied = candidates.filter((c) => c.distance === minDistance);
+                    const direction = tied[Math.floor(Math.random() * tied.length)].vector.clone();
 
                     const plateMaterial = material.clone();
                     const plate = new THREE.Mesh(geometry, plateMaterial);
+
+                    // direction is always a single-axis unit vector, so it doubles
+                    // directly as the stretch axis.
+                    const stretchAxis: 'x' | 'y' | 'z' =
+                        direction.x !== 0 ? 'x' : direction.y !== 0 ? 'y' : 'z';
 
                     const startPosition = targetPosition
                         .clone()
@@ -183,16 +181,22 @@ export class Grid extends SceneEntity {
                     // compressing the few already-close-to-center cells further.
                     const normalizedDistance =
                         maxDistanceFromCenter > 0 ? distanceFromCenter / maxDistanceFromCenter : 0;
-                    const spreadDistance = normalizedDistance * normalizedDistance * maxDistanceFromCenter;
+                    const spreadDistance =
+                        normalizedDistance * normalizedDistance * maxDistanceFromCenter;
 
                     this.mesh.add(plate);
                     this.flyingPlates.push({
                         mesh: plate,
                         startPosition,
                         targetPosition,
-                        delay: spreadDistance * (Math.random() * (max - min) + min),
+                        delay:
+                            spreadDistance * (Math.random() * (max - min) + min) +
+                            Math.random() * this.baseDelayJitter,
                         elapsed: 0,
-                        duration: this.flyInDuration,
+                        duration:
+                            this.flyInDuration *
+                            (1 + (Math.random() * 2 - 1) * this.durationJitter),
+                        stretchAxis,
                     });
                 }
             }
@@ -212,6 +216,16 @@ export class Grid extends SceneEntity {
                 const t = plate.elapsed / plate.duration;
                 const eased = 1 - (1 - t) * (1 - t);
                 plate.mesh.position.lerpVectors(plate.startPosition, plate.targetPosition, eased);
+
+                // Stretches into a cuboid along the travel axis, shrinking back to
+                // a plain cube in lockstep with the same ease-out arrival curve so
+                // it's always exactly a cube the instant it reaches its target.
+                const stretch = 1 + this.maxStretch * (1 - eased);
+                plate.mesh.scale.set(
+                    plate.stretchAxis === 'x' ? stretch : 1,
+                    plate.stretchAxis === 'y' ? stretch : 1,
+                    plate.stretchAxis === 'z' ? stretch : 1,
+                );
             }
         }
     }
