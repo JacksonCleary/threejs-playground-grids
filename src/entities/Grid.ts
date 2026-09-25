@@ -26,6 +26,7 @@ export class Grid extends SceneEntity {
     alwaysUpdate = true;
     private occupied: boolean[] = [];
     private readonly cellSize = 1;
+    // Distance plates travel in from outside the grid before arriving.
     private readonly flyInDistance = 300;
     private readonly flyInDuration = 3;
     // How far a plate stretches along its travel axis at top speed (relative to its own size).
@@ -90,6 +91,18 @@ export class Grid extends SceneEntity {
         );
     }
 
+    // Fraction (0-1) of plates that have cleared their delay and finished
+    // flying in; lets callers start the next cycle before this one fully ends.
+    getSettledFraction(): number {
+        if (this.flyingPlates.length === 0) {
+            return 1;
+        }
+        const settledCount = this.flyingPlates.filter(
+            (plate) => plate.delay <= 0 && plate.elapsed >= plate.duration,
+        ).length;
+        return settledCount / this.flyingPlates.length;
+    }
+
     isCellAvailable(index: number): boolean {
         return index >= 0 && index < this.occupied.length && !this.occupied[index];
     }
@@ -121,8 +134,7 @@ export class Grid extends SceneEntity {
         this.mesh.position.set(-totalWidth / 2, 0, -totalLength / 2);
 
         this.geometry = new THREE.BoxGeometry(1, 1, 1);
-        // Drawn as real line geometry (not a screen-space silhouette pass) so
-        // every block gets its own outline even where it touches a neighbor.
+        // Per-cube outline geometry, so every block is outlined individually.
         this.edgesGeometry = new THREE.EdgesGeometry(this.geometry);
         this.edgeMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
 
@@ -144,10 +156,7 @@ export class Grid extends SceneEntity {
 
         // Build the plate pool once; reset() only repositions/rescales these.
         for (let i = 0; i < cellCount; i++) {
-            const plate = new THREE.Mesh(
-                this.geometry,
-                [...this.materials].sort(() => Math.random() - 0.5),
-            );
+            const plate = new THREE.Mesh(this.geometry, this.shuffleMaterials());
             plate.add(new THREE.LineSegments(this.edgesGeometry, this.edgeMaterial));
             this.mesh.add(plate);
             this.flyingPlates.push({
@@ -167,8 +176,7 @@ export class Grid extends SceneEntity {
         this.reset();
     }
 
-    // Re-runs the partition and restarts every plate's fly-in, reusing the
-    // existing meshes/materials/geometries instead of recreating them.
+    // Re-runs the partition and restarts every plate's fly-in.
     reset(): void {
         // Undoes the passive per-frame shrink in update() so cycles don't compound.
         this.mesh.scale.set(1, 1, 1);
@@ -176,43 +184,107 @@ export class Grid extends SceneEntity {
         const leaves: PartitionBox[] = [];
         this.subdivide(this.totalBox, this.flyingPlates.length, leaves);
 
+        const totalMin = this.totalBox.min;
+        const totalMax = this.totalBox.max;
+        const totalCenter = this.totalCenter;
+
         leaves.forEach((box, i) => {
             const plate = this.flyingPlates[i];
-            const size = box.max.clone().sub(box.min);
-            const center = box.min.clone().add(box.max).multiplyScalar(0.5);
 
-            // Distance from each of this leaf's faces to the matching face of the
-            // overall volume; the smallest picks which of the 6 sides it flies in from.
-            const faceDistances: Array<{ distance: number; axis: 'x' | 'y' | 'z'; sign: number }> =
-                [
-                    { distance: box.min.x - this.totalBox.min.x, axis: 'x', sign: -1 },
-                    { distance: this.totalBox.max.x - box.max.x, axis: 'x', sign: 1 },
-                    { distance: box.min.y - this.totalBox.min.y, axis: 'y', sign: -1 },
-                    { distance: this.totalBox.max.y - box.max.y, axis: 'y', sign: 1 },
-                    { distance: box.min.z - this.totalBox.min.z, axis: 'z', sign: -1 },
-                    { distance: this.totalBox.max.z - box.max.z, axis: 'z', sign: 1 },
-                ];
-            const minDistance = Math.min(...faceDistances.map((f) => f.distance));
-            const tied = faceDistances.filter((f) => f.distance - minDistance < 1e-6);
-            const choice = tied[Math.floor(Math.random() * tied.length)];
-            const direction = new THREE.Vector3(
-                choice.axis === 'x' ? choice.sign : 0,
-                choice.axis === 'y' ? choice.sign : 0,
-                choice.axis === 'z' ? choice.sign : 0,
+            const sizeX = box.max.x - box.min.x;
+            const sizeY = box.max.y - box.min.y;
+            const sizeZ = box.max.z - box.min.z;
+            const centerX = (box.min.x + box.max.x) * 0.5;
+            const centerY = (box.min.y + box.max.y) * 0.5;
+            const centerZ = (box.min.z + box.max.z) * 0.5;
+
+            // Distance from each of this leaf's faces to the matching face of
+            // the overall volume; the smallest picks which of the 6 sides it
+            // flies in from. Ties are broken via reservoir sampling so no
+            // candidate array needs to be allocated per leaf.
+            const distNegX = box.min.x - totalMin.x;
+            const distPosX = totalMax.x - box.max.x;
+            const distNegY = box.min.y - totalMin.y;
+            const distPosY = totalMax.y - box.max.y;
+            const distNegZ = box.min.z - totalMin.z;
+            const distPosZ = totalMax.z - box.max.z;
+            const minDistance = Math.min(
+                distNegX,
+                distPosX,
+                distNegY,
+                distPosY,
+                distNegZ,
+                distPosZ,
             );
 
-            plate.mesh.scale.copy(size);
-            plate.mesh.material = [...this.materials].sort(() => Math.random() - 0.5);
+            let axis: 'x' | 'y' | 'z' = 'x';
+            let sign = -1;
+            let matches = 0;
+            if (distNegX - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'x';
+                    sign = -1;
+                }
+            }
+            if (distPosX - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'x';
+                    sign = 1;
+                }
+            }
+            if (distNegY - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'y';
+                    sign = -1;
+                }
+            }
+            if (distPosY - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'y';
+                    sign = 1;
+                }
+            }
+            if (distNegZ - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'z';
+                    sign = -1;
+                }
+            }
+            if (distPosZ - minDistance < 1e-6) {
+                matches++;
+                if (Math.random() < 1 / matches) {
+                    axis = 'z';
+                    sign = 1;
+                }
+            }
 
-            const startPosition = center.clone().addScaledVector(direction, this.flyInDistance);
-            plate.mesh.position.copy(startPosition);
+            plate.targetScale.set(sizeX, sizeY, sizeZ);
+            plate.targetPosition.set(centerX, centerY, centerZ);
+            plate.mesh.scale.set(sizeX, sizeY, sizeZ);
+            plate.mesh.material = this.shuffleMaterials();
+
+            plate.startPosition.set(
+                centerX + (axis === 'x' ? sign * this.flyInDistance : 0),
+                centerY + (axis === 'y' ? sign * this.flyInDistance : 0),
+                centerZ + (axis === 'z' ? sign * this.flyInDistance : 0),
+            );
+            plate.mesh.position.copy(plate.startPosition);
+            plate.stretchAxis = axis;
 
             const max = 0.35;
             const min = 0.01;
 
             // Non-linear (squared) redistribution: pushes most cubes' stagger
             // delay toward the high end so they don't all land at once.
-            const distanceFromCenter = center.distanceTo(this.totalCenter);
+            const dx = centerX - totalCenter.x;
+            const dy = centerY - totalCenter.y;
+            const dz = centerZ - totalCenter.z;
+            const distanceFromCenter = Math.sqrt(dx * dx + dy * dy + dz * dz);
             const normalizedDistance =
                 this.maxDistanceFromCenter > 0
                     ? distanceFromCenter / this.maxDistanceFromCenter
@@ -220,10 +292,6 @@ export class Grid extends SceneEntity {
             const spreadDistance =
                 normalizedDistance * normalizedDistance * this.maxDistanceFromCenter;
 
-            plate.startPosition.copy(startPosition);
-            plate.targetPosition.copy(center);
-            plate.targetScale.copy(size);
-            plate.stretchAxis = choice.axis;
             plate.delay =
                 spreadDistance * (Math.random() * (max - min) + min) +
                 Math.random() * this.baseDelayJitter;
@@ -231,6 +299,16 @@ export class Grid extends SceneEntity {
             plate.duration =
                 this.flyInDuration * (1 + (Math.random() * 2 - 1) * this.durationJitter);
         });
+    }
+
+    // Fisher-Yates shuffle of the 6 materials, used to randomize per-plate face order.
+    private shuffleMaterials(): THREE.MeshToonMaterial[] {
+        const shuffled = this.materials.slice();
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
     }
 
     // Recursively guillotine-cuts `box` into exactly `capacity` leaf boxes that
@@ -241,15 +319,18 @@ export class Grid extends SceneEntity {
             return;
         }
 
-        const size = box.max.clone().sub(box.min);
+        const sizeX = box.max.x - box.min.x;
+        const sizeY = box.max.y - box.min.y;
+        const sizeZ = box.max.z - box.min.z;
         const axis: 'x' | 'y' | 'z' =
-            size.x >= size.y && size.x >= size.z ? 'x' : size.y >= size.z ? 'y' : 'z';
+            sizeX >= sizeY && sizeX >= sizeZ ? 'x' : sizeY >= sizeZ ? 'y' : 'z';
+        const size = axis === 'x' ? sizeX : axis === 'y' ? sizeY : sizeZ;
 
         const ratio = 0.5 + (Math.random() - 0.5) * this.splitJitter;
         const leftCapacity = Math.min(capacity - 1, Math.max(1, Math.round(capacity * ratio)));
         const rightCapacity = capacity - leftCapacity;
 
-        const splitValue = box.min[axis] + size[axis] * (leftCapacity / capacity);
+        const splitValue = box.min[axis] + size * (leftCapacity / capacity);
 
         const leftMax = box.max.clone();
         leftMax[axis] = splitValue;
@@ -283,12 +364,13 @@ export class Grid extends SceneEntity {
                 );
             }
         }
-        // scale down mesh in place while flyingplates
-        this.mesh.scale.set(
-            this.mesh.scale.x * 0.998,
-            this.mesh.scale.y * 0.998,
-            this.mesh.scale.z * 0.998,
-        );
+
+        // Only shrinks while plates are still mid-flight, so this stops (and
+        // stops costing anything) once everything has settled instead of
+        // shrinking forever across repeated reset() cycles.
+        if (!this.isSettled()) {
+            this.mesh.scale.multiplyScalar(0.998);
+        }
     }
 
     dispose(): void {
